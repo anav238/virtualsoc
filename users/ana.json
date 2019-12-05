@@ -1,0 +1,7 @@
+{
+    "password": "test",
+    "user_type": "normal",
+    "inbox": [["tode", "hatz johnule"]],
+    "friends": ["tode"],
+    "posts": [["public", "Hello World!"], ["friends", "Imi plac pisicile"]]
+}
