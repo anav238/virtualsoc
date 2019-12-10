@@ -1,0 +1,8 @@
+{
+    "password": "test",
+    "userType": "regular",
+    "friends": ["tode"],
+    "acquaintances": [],
+    "inbox":[["ana","mesaj catre Cosmin"],["ana","alt mesaj catre Cosmin"]],
+    "posts": [["public", "Invitatie la balul bobocilor"]]
+}

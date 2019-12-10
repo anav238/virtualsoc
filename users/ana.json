@@ -1,7 +1,8 @@
 {
     "password": "test",
-    "user_type": "normal",
-    "inbox": [["tode", "hatz johnule"]],
+    "userType": "regular",
     "friends": ["tode"],
-    "posts": [["public", "Hello World!"], ["friends", "Imi plac pisicile"]]
+    "acquaintances": ["cosmin"],
+    "inbox":[["tode","hey"],["cosmin","olla"],["tode","ce mai faci?"],["tode","cf mai"]],
+    "posts": [["public", "Postarea mea"]]
 }

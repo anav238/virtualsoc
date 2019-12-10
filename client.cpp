@@ -22,7 +22,7 @@ int ended = 0;
 char inbox[MAX_MSG] = "";
 
 void* getServerMessages(void* args) {
-    while (1) {
+    while (!ended) {
         char message[MAX_MSG] = "";
         read(sd, message, MAX_MSG);
         if (strlen(message)) {
@@ -50,17 +50,19 @@ void processCommands() {
         char full_command[MAX_CMD];
         bzero(full_command, MAX_CMD);
 
-        if(!fgets(full_command, sizeof(full_command), stdin) && strlen(inbox)) {
-            printf("!!!%s\n", inbox);
-            strcpy(inbox, "");
-            continue;
-        }
-
         char *command = strtok(full_command, "\n");
         if (strcmp(command, "help") == 0) {
             printHelp();
             continue;
         }
+        if (strcmp(command, "refresh") == 0) {
+            if (strlen(inbox)) {
+                printf("%s\n", inbox);
+                strcpy(inbox, "");
+            }
+        }
+        if (strcmp(command, "quit") == 0) 
+            break;
 
         if (write (sd, command, strlen(full_command) + 1) <= 0) 
             perror ("[client]Eroare la write() spre server.\n");

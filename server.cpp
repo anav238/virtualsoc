@@ -8,6 +8,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include "rapidjson/rapidjson.h"
+#include "rapidjson/document.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
+#include "rapidjson/filereadstream.h"
+#include "rapidjson/filewritestream.h"
 
 #define PORT 2024
 #define MAX_CLIENTS 500
@@ -15,12 +20,15 @@
 #define MAX_CMD 1200
 #define MAX_MSG 1000 
 #define MAX_RES 200
+#define MAX_PROFILE 100000
+
+using namespace rapidjson;
 
 extern int errno;
 int connectedClients;
 int clients[MAX_CLIENTS];
 char usernames[MAX_CLIENTS][MAX_UNAME];
-pthread_mutex_t lock;
+pthread_mutex_t varLock, fileLock;
 
 int checkCredentials(char* username, char* password) {
 	char filename[MAX_UNAME + 10] = "users/";
@@ -39,35 +47,81 @@ int userExists(char *username) {
 }
 
 int getOnlineUserId(char *username) {
-	pthread_mutex_lock(&lock);
+	pthread_mutex_lock(&varLock);
 	for (int i = 0; i < connectedClients; i++) 
 		if (strcmp(usernames[i], username) == 0)
 			return i;
-	pthread_mutex_unlock(&lock);
+	pthread_mutex_unlock(&varLock);
 	return -1;
 }
 
 int sendOfflineMessage(char *sender, char *recipient, char *message) {
-	if (!userExists(recipient))
+	char filename[MAX_UNAME + 10] = "users/";
+	strcat(filename, recipient);
+	strcat(filename, ".json");
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL) 
 		return 0;
-	return 1;
+
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+	assert(doc.HasMember("inbox"));
+	
+	Document::AllocatorType& allocator = doc.GetAllocator();
+
+	assert(doc["inbox"].IsArray());
+	Value messageArray(kArrayType);
+
+	Value senderValue;
+	senderValue.SetString(sender, strlen(sender), allocator);
+	Value messageValue;
+	messageValue.SetString(message, strlen(message), allocator);
+	
+	messageArray.PushBack(senderValue, allocator);
+	messageArray.PushBack(messageValue, allocator);
+
+	doc["inbox"].PushBack(messageArray, allocator);
+
+	fclose(fd);
+
+	fd = fopen(filename, "w");
+	if (fd == NULL) 
+		return 0;
+
+	char wbuff[MAX_PROFILE];
+	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
+	Writer<FileWriteStream> writer(ws);
+	doc.Accept(writer);
+
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
 }
 
-int sendMessage(char *sender, char *recipient, char *message) {
-	int recipientId = getOnlineUserId(recipient);
-	char toSend[MAX_MSG + 200] = "[Message from ";
-	strcat(toSend, sender);
-	strcat(toSend, "] ");
-	strcat(toSend, message);
+int sendMessage(char *sender, char *recipients, char *message) {
+	char *currentRecipient = strtok(recipients, " "); 
+	int succeses = 0;
+	while (currentRecipient) {
+		int recipientId = getOnlineUserId(currentRecipient);
+		char toSend[MAX_MSG + 200] = "[Message from ";
+		strcat(toSend, sender);
+		strcat(toSend, "] ");
+		strcat(toSend, message);
 
-	if (recipientId >= 0) {
-		if (write(clients[recipientId], toSend, strlen(toSend) + 1) <= 0) {
-			perror("[server]Eroare la scriere in client.\n");
-			return 0;
+		if (recipientId >= 0) {
+			if (write(clients[recipientId], toSend, strlen(toSend) + 1) <= 0)
+				perror("[server]Eroare la scriere in client.\n");
+			else
+				succeses++;
 		}
-		return 1;
+		else succeses += sendOfflineMessage(sender, currentRecipient, message);
 	}
-	return sendOfflineMessage(sender, recipient, message);
+	return succeses;
 }
 
 int registerUser(char* username, char* password) {
@@ -76,9 +130,9 @@ int registerUser(char* username, char* password) {
 
 int logout(char* username, int* loggedIn) {
 	*loggedIn = 0;
-	pthread_mutex_lock(&lock);
+	pthread_mutex_lock(&varLock);
 	strcpy(username, "");
-	pthread_mutex_unlock(&lock);
+	pthread_mutex_unlock(&varLock);
 }
 
 int login(char* username, int* loggedIn, char* usernameTry, char* passwordTry) {
@@ -87,9 +141,9 @@ int login(char* username, int* loggedIn, char* usernameTry, char* passwordTry) {
 	if (*loggedIn == 1)
 		return 0;
 	if (checkCredentials(usernameTry, passwordTry)) {
-		pthread_mutex_lock(&lock);
+		pthread_mutex_lock(&varLock);
 		strcpy(username, usernameTry);
-		pthread_mutex_unlock(&lock);
+		pthread_mutex_unlock(&varLock);
 		*loggedIn = 1;
 		return 1;	
 	} 
@@ -214,11 +268,15 @@ int main()
 		return errno;
 	}
 
+	if (pthread_mutex_init(&varLock, NULL) != 0 || pthread_mutex_init(&fileLock, NULL) != 0) {
+        perror("[server]Eroare la initializarea mutex");
+        return errno;
+    }
+
 	while (1)	{
 		int client;
 		socklen_t length = sizeof(from);
 
-		printf("[server]Asteptam clienti la portul %d...\n", PORT);
 		fflush(stdout);
 
 		client = accept(sd, (struct sockaddr *) &from, &length);
@@ -233,6 +291,7 @@ int main()
 		pthread_t thread_id;
 		pthread_create(&thread_id, NULL, processClientCommands, (void*)&clientId);
 	}
-	pthread_mutex_destroy(&lock);
+	pthread_mutex_destroy(&fileLock);
+	pthread_mutex_destroy(&varLock);
 	return 0;
 }
