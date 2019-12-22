@@ -49,6 +49,7 @@ void processCommands() {
     while (1) {
         char full_command[MAX_CMD];
         bzero(full_command, MAX_CMD);
+        fgets(full_command, MAX_CMD, stdin);
 
         char *command = strtok(full_command, "\n");
         if (strcmp(command, "help") == 0) {

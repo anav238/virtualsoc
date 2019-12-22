@@ -1,8 +1,1 @@
-{
-    "password": "test",
-    "userType": "regular",
-    "friends": ["ana", "cosmin"],
-    "acquaintances": [],
-    "inbox":[["ana","bunaaa"]],
-    "posts": [["public", "Invitatie la balul de caritate"]]
-}
+{"password":"test","userType":"regular","friends":["ana","cosmin"],"acquaintances":[],"inbox":[["ana"," salut"],["ana"," ce mai faceti?"],["public","buna dimineata s-a trezit dulceata"]],"posts":[["public","Invitatie la balul de caritate"]]}

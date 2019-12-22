@@ -17,6 +17,7 @@
 #define PORT 2024
 #define MAX_CLIENTS 500
 #define MAX_UNAME 20
+#define MAX_PASS 20
 #define MAX_CMD 1200
 #define MAX_MSG 1000 
 #define MAX_RES 200
@@ -33,13 +34,29 @@ pthread_mutex_t varLock, fileLock;
 int checkCredentials(char* username, char* password) {
 	char filename[MAX_UNAME + 10] = "users/";
 	strcat(filename, username);
-	strcat(filename, ".xml");
+	strcat(filename, ".json");
 
-	if (!fopen(filename, "r")) 
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL) 
 		return 0;
 
-	
-	return 1;
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+	assert(doc.HasMember("password"));
+
+	assert(doc["password"].IsString());
+	char actualPassword[MAX_PASS];
+	strcpy(actualPassword, doc["password"].GetString());
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
+	if(strcmp(password, actualPassword) == 0) 
+		return 1;
+	return 0;
 }
 
 int userExists(char *username) {
@@ -53,6 +70,77 @@ int getOnlineUserId(char *username) {
 			return i;
 	pthread_mutex_unlock(&varLock);
 	return -1;
+}
+
+int viewProfile(char *username, char *requestFrom, char *profile) {
+	char filename[MAX_UNAME + 10] = "users/";
+	strcat(filename, author);
+	strcat(filename, ".json");
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL) 
+		return 0;
+
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+	assert(doc.HasMember("posts"));
+
+	
+	return 1;
+}
+
+int post(char *author, char *visibility, char *text) {
+	char filename[MAX_UNAME + 10] = "users/";
+	strcat(filename, author);
+	strcat(filename, ".json");
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL) 
+		return 0;
+
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+	assert(doc.HasMember("posts"));
+	
+	Document::AllocatorType& allocator = doc.GetAllocator();
+
+	assert(doc["posts"].IsArray());
+	Value postArray(kArrayType);
+
+	Value visibilityValue;
+	visibilityValue.SetString(visibility, strlen(visibility), allocator);
+	Value textValue;
+	textValue.SetString(text, strlen(text), allocator);
+	
+	postArray.PushBack(visibilityValue, allocator);
+	postArray.PushBack(textValue, allocator);
+
+	doc["posts"].PushBack(postArray, allocator);
+
+	fclose(fd);
+
+	fd = fopen(filename, "w");
+	if (fd == NULL) 
+		return 0;
+
+	char wbuff[MAX_PROFILE];
+	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
+	Writer<FileWriteStream> writer(ws);
+	doc.Accept(writer);
+
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
+	return 1;
 }
 
 int sendOfflineMessage(char *sender, char *recipient, char *message) {
@@ -101,6 +189,7 @@ int sendOfflineMessage(char *sender, char *recipient, char *message) {
 
 	fclose(fd);
 	pthread_mutex_unlock(&fileLock);
+	return 1;
 }
 
 int sendMessage(char *sender, char *recipients, char *message) {
@@ -108,31 +197,65 @@ int sendMessage(char *sender, char *recipients, char *message) {
 	int succeses = 0;
 	while (currentRecipient) {
 		int recipientId = getOnlineUserId(currentRecipient);
-		char toSend[MAX_MSG + 200] = "[Message from ";
-		strcat(toSend, sender);
-		strcat(toSend, "] ");
-		strcat(toSend, message);
 
 		if (recipientId >= 0) {
+			char toSend[MAX_MSG + 200] = "[Message from ";
+			strcat(toSend, sender);
+			strcat(toSend, "] ");
+			strcat(toSend, message);
 			if (write(clients[recipientId], toSend, strlen(toSend) + 1) <= 0)
 				perror("[server]Eroare la scriere in client.\n");
 			else
 				succeses++;
 		}
 		else succeses += sendOfflineMessage(sender, currentRecipient, message);
+		currentRecipient = strtok(NULL, " ");
 	}
 	return succeses;
 }
 
 int registerUser(char* username, char* password) {
+	char filename[MAX_UNAME + 10] = "users/";
+	strcat(filename, username);
+	strcat(filename, ".json");
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd != NULL) 
+		return 0;
+
+	fd = fopen("users/template.json","r");
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+
+	Document::AllocatorType& allocator = doc.GetAllocator();
+	doc["password"].SetString(password, allocator);
+	fclose(fd);
+
+	fd = fopen(filename, "w");
+
+	char wbuff[MAX_PROFILE];
+	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
+	Writer<FileWriteStream> writer(ws);
+	doc.Accept(writer);
+
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
 	return 1;
 }
 
 int logout(char* username, int* loggedIn) {
+	if (*loggedIn == 0)
+		return 0;
 	*loggedIn = 0;
 	pthread_mutex_lock(&varLock);
 	strcpy(username, "");
 	pthread_mutex_unlock(&varLock);
+	return 1;
 }
 
 int login(char* username, int* loggedIn, char* usernameTry, char* passwordTry) {
@@ -186,19 +309,24 @@ void processClientCommand(char* command, int *loggedIn, char* username, char* re
 	else if (strcmp(commandName, "register") == 0) {
 		char* newUsername = strtok(NULL, " ");
 		char* newPassword = strtok(NULL, " ");
-		if (registerUser(newUsername, newPassword) == 0) 
+		if (registerUser(newUsername, newPassword) == 1) 
 			strcpy(result, "User created succesfully.\n");
 		else 
 			strcpy(result, "Username already exists.\n");
 	}
 
 	else if (strcmp(commandName, "message") == 0) {
-		char* recipient = strtok(NULL, " ");
+		char* recipients = strtok(NULL, ":");
 		char* message = strtok(NULL, "\n");
-		if (sendMessage(username, recipient, message)) 
-			strcpy(result, "Message was sent succesfully.\n");
+		sprintf(result, "%d message(s) sent.\n", sendMessage(username, recipients, message));
+	}
+	else if (strcmp(commandName, "post") == 0) {
+		char* visibility = strtok(NULL, " ");
+		char* message = strtok(NULL, "\n");
+		if (post(username, visibility,  message)) 
+			strcpy(result, "Post published succesfully.\n");
 		else 
-			strcpy(result, "Message could not be sent.\n");
+			strcpy(result, "Post could not be published.\n");
 	}
 
 	else 

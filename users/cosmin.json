@@ -1,8 +1,1 @@
-{
-    "password": "test",
-    "userType": "regular",
-    "friends": ["tode"],
-    "acquaintances": [],
-    "inbox":[["ana","mesaj catre Cosmin"],["ana","alt mesaj catre Cosmin"]],
-    "posts": [["public", "Invitatie la balul bobocilor"]]
-}
+{"password":"test","userType":"regular","friends":["tode"],"acquaintances":[],"inbox":[["ana"," ce mai faceti?"],["tode"," viata e frumoasa"],["tode"," ooo da"]],"posts":[["public","Invitatie la balul bobocilor"]]}
