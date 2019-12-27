@@ -1,1 +1,1 @@
-{"password":"test","userType":"regular","friends":["tode"],"acquaintances":["cosmin"],"inbox":[["tode","hey"],["cosmin","olla"],["tode","ce mai faci?"],["tode","cf mai"],["tode"," viata e frumoasa"],["tode"," imi place de tine"]],"posts":[["public","Postarea mea"]]}
+{"password":"test","userType":"regular","visibility":"acquaintances","friends":["ana","tode"],"acquaintances":["cosmin"],"inbox":[],"posts":[["public","Postarea mea"]]}

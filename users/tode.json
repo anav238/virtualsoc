@@ -1,1 +1,1 @@
-{"password":"test","userType":"regular","friends":["ana","cosmin"],"acquaintances":[],"inbox":[["ana"," salut"],["ana"," ce mai faceti?"],["public","buna dimineata s-a trezit dulceata"]],"posts":[["public","Invitatie la balul de caritate"]]}
+{"password":"test","userType":"regular","visibility":"friends","friends":["tode","ana","cosmin"],"acquaintances":[],"inbox":[["ana"," salut"],["ana"," ce mai faceti?"],["ionut"," bine vam gasit"],["ana"," mesaj grup"]],"posts":[["public","buna dimineata s-a trezit dulceata"],["public","Invitatie la balul de caritate"]]}

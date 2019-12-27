@@ -21,6 +21,7 @@
 #define MAX_CMD 1200
 #define MAX_MSG 1000 
 #define MAX_RES 200
+#define MAX_POST 300
 #define MAX_PROFILE 100000
 
 using namespace rapidjson;
@@ -30,6 +31,8 @@ int connectedClients;
 int clients[MAX_CLIENTS];
 char usernames[MAX_CLIENTS][MAX_UNAME];
 pthread_mutex_t varLock, fileLock;
+
+char masterPassword[] = "admin";
 
 int checkCredentials(char* username, char* password) {
 	char filename[MAX_UNAME + 10] = "users/";
@@ -72,9 +75,80 @@ int getOnlineUserId(char *username) {
 	return -1;
 }
 
+void getRelationship(Document &doc, char *username, char *relationship) {
+	Document::AllocatorType& allocator = doc.GetAllocator();
+	assert(doc.HasMember("friends"));
+
+	assert(doc["friends"].IsArray());
+	for (SizeType i = 0; i < doc["friends"].Size(); i++) {
+		if (strcmp(username, doc["friends"][i].GetString()) == 0) {
+			strcpy(relationship, "friends");
+			return;
+		}
+	}
+
+	assert(doc["acquaintances"].IsArray());
+	for (SizeType i = 0; i < doc["acquaintances"].Size(); i++) {
+		if (strcmp(username, doc["acquaintances"][i].GetString()) == 0) {
+			strcpy(relationship, "acquaintances");
+			return;
+		}
+	}
+
+	strcpy(relationship, "strangers");
+}
+
+int addToGroup(char *owner, char *userToAdd, char *group) {
+	if (strcmp(group, "friends") != 0 && strcmp(group, "acquaintances") != 0)
+		return 0;
+
+	char filename[MAX_UNAME + 10];
+	sprintf(filename, "users/%s.json", userToAdd);
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL) 
+		return 0;
+
+	sprintf(filename, "users/%s.json", owner);
+	if (fd == NULL) 
+		return 0;
+
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+	assert(doc.HasMember(group));
+	
+	Document::AllocatorType& allocator = doc.GetAllocator();
+
+	assert(doc[group].IsArray());
+	Value addedUser;
+	addedUser.SetString(userToAdd, allocator);
+
+	doc[group].PushBack(addedUser, allocator);
+
+	fclose(fd);
+
+	fd = fopen(filename, "w");
+	if (fd == NULL) 
+		return 0;
+
+	char wbuff[MAX_PROFILE];
+	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
+	Writer<FileWriteStream> writer(ws);
+	doc.Accept(writer);
+
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
+	return 1;
+}
+
 int viewProfile(char *username, char *requestFrom, char *profile) {
 	char filename[MAX_UNAME + 10] = "users/";
-	strcat(filename, author);
+	strcat(filename, username);
 	strcat(filename, ".json");
 
 	pthread_mutex_lock(&fileLock);
@@ -88,13 +162,46 @@ int viewProfile(char *username, char *requestFrom, char *profile) {
 	Document doc;
 	doc.ParseStream(rs);
 	assert(doc.IsObject());
+	Document::AllocatorType& allocator = doc.GetAllocator();
+
+	char relationship[20];
+	getRelationship(doc, requestFrom, relationship);
+	assert(doc.HasMember("visibility"));
+	assert(doc["visibility"].IsString());
+	char profileVisibility[20];
+	strcpy(profileVisibility, doc["visibility"].GetString());
+	if (strcmp(profileVisibility, "friends") == 0 && strcmp(relationship, "friends") != 0)
+		return 0;
+	if (strcmp(profileVisibility, "acquaintances") == 0 && strcmp(relationship, "strangers") == 0)
+		return 0;
 	assert(doc.HasMember("posts"));
 
-	
+	assert(doc["posts"].IsArray());
+	for (SizeType i = 0; i < doc["posts"].Size(); i++) {
+		assert(doc["posts"][i].IsArray());
+		char visibility[20], text[MAX_POST];
+		strcpy(visibility, doc["posts"][i][0].GetString());
+		strcpy(text, doc["posts"][i][1].GetString());
+
+		if (strcmp(visibility, "public") == 0 || strcmp(relationship, "friends") == 0
+			|| (strcmp(visibility, "acquaintances") == 0 && strcmp(relationship, "acquaintances") == 0)) {
+			strcat(profile, text);
+			strcat(profile, "\n");
+		}
+	}
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
 	return 1;
 }
 
 int post(char *author, char *visibility, char *text) {
+	if (strcmp(visibility, "public") != 0 && strcmp(visibility, "friends") != 0
+		&& strcmp(visibility, "acquaintances") != 0) 
+		return 0;
+
+	if (strlen(text) > MAX_POST)
+		return 0;
+
 	char filename[MAX_UNAME + 10] = "users/";
 	strcat(filename, author);
 	strcat(filename, ".json");
@@ -141,6 +248,59 @@ int post(char *author, char *visibility, char *text) {
 	fclose(fd);
 	pthread_mutex_unlock(&fileLock);
 	return 1;
+}
+
+void getOfflineInbox(char *username, char *result) {
+	char filename[MAX_UNAME + 10] = "users/";
+	strcat(filename, username);
+	strcat(filename, ".json");
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL) 
+		return;
+
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+	assert(doc.HasMember("inbox"));
+	
+	Document::AllocatorType& allocator = doc.GetAllocator();
+
+	assert(doc["inbox"].IsArray());
+	Value emptyArray(kArrayType);
+
+	char inbox[MAX_MSG * 100];
+	sprintf(inbox, "%d new messages while you were away.\n", (int)doc["inbox"].Size());
+	for (SizeType i = 0; i < doc["inbox"].Size(); i++) {
+		assert(doc["inbox"][i].IsArray());
+		char sender[MAX_UNAME], message[MAX_MSG];
+		strcpy(sender, doc["inbox"][i][0].GetString());
+		strcpy(message, doc["inbox"][i][1].GetString());
+
+		char newMessage[MAX_MSG + MAX_UNAME + 20];
+		sprintf(newMessage, "Message from %s: %s\n", sender, message);
+		strcat(inbox, newMessage);
+	}
+	strcat(result, inbox);
+	doc["inbox"].SetArray();
+
+	fclose(fd);
+
+	fd = fopen(filename, "w");
+	if (fd == NULL) 
+		return;
+
+	char wbuff[MAX_PROFILE];
+	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
+	Writer<FileWriteStream> writer(ws);
+	doc.Accept(writer);
+
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
 }
 
 int sendOfflineMessage(char *sender, char *recipient, char *message) {
@@ -214,7 +374,16 @@ int sendMessage(char *sender, char *recipients, char *message) {
 	return succeses;
 }
 
-int registerUser(char* username, char* password) {
+int registerUser(char* username, char* password, char* masterPasswordTry) {
+	if (strlen(username) == 0)
+		return -4;
+
+	if (masterPasswordTry && strcmp(masterPasswordTry, masterPassword) != 0)
+		return -3;
+
+	if (strlen(username) > MAX_UNAME || strlen(password) > MAX_PASS) 
+		return -2;
+
 	char filename[MAX_UNAME + 10] = "users/";
 	strcat(filename, username);
 	strcat(filename, ".json");
@@ -222,7 +391,7 @@ int registerUser(char* username, char* password) {
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
 	if (fd != NULL) 
-		return 0;
+		return -1;
 
 	fd = fopen("users/template.json","r");
 	char rbuff[MAX_PROFILE];
@@ -234,6 +403,17 @@ int registerUser(char* username, char* password) {
 
 	Document::AllocatorType& allocator = doc.GetAllocator();
 	doc["password"].SetString(password, allocator);
+
+	if (masterPasswordTry) 
+		doc["userType"].SetString("admin");
+	else 
+		doc["userType"].SetString("regular");
+
+	assert(doc["friends"].IsArray());
+	Value usernameValue;
+	usernameValue.SetString(username, strlen(username), allocator);
+	doc["friends"].PushBack(usernameValue, allocator);
+
 	fclose(fd);
 
 	fd = fopen(filename, "w");
@@ -259,8 +439,6 @@ int logout(char* username, int* loggedIn) {
 }
 
 int login(char* username, int* loggedIn, char* usernameTry, char* passwordTry) {
-	if (!usernameTry || !passwordTry)
-		return 0;
 	if (*loggedIn == 1)
 		return 0;
 	if (checkCredentials(usernameTry, passwordTry)) {
@@ -292,15 +470,31 @@ void processClientCommand(char* command, int *loggedIn, char* username, char* re
 
 	if (strcmp(commandName, "login") == 0) {
 		char* usernameTry = strtok(NULL, " ");
+		if (!usernameTry) {
+			strcpy(result, "Incorrect syntax!");
+			return;
+		}
 		char* passwordTry = strtok(NULL, " ");
-		if (login(username, loggedIn, usernameTry, passwordTry)) 
-			strcpy(result, "Succesful login!");
+		if (!passwordTry) {
+			strcpy(result, "Incorrect syntax!");
+			return;
+		}
+		char* others = strtok(NULL, " ");
+		if (others)
+			strcpy(result, "Incorrect syntax!");
+		else if (login(username, loggedIn, usernameTry, passwordTry)) {
+			strcpy(result, "Succesful login!\n");
+			getOfflineInbox(username, result);
+		}
 		else 
 			strcpy(result, "Login failed!");
 	}
 
 	else if (strcmp(commandName, "logout") == 0) {
-		if (logout(username, loggedIn)) 
+		char* others = strtok(NULL, " ");
+		if (others)
+			strcpy(result, "Incorrect syntax!");
+		else if (logout(username, loggedIn)) 
 			strcpy(result, "Succesful logout!\n");
 		else 
 			strcpy(result, "You are already logged out!\n");
@@ -308,30 +502,106 @@ void processClientCommand(char* command, int *loggedIn, char* username, char* re
 
 	else if (strcmp(commandName, "register") == 0) {
 		char* newUsername = strtok(NULL, " ");
+		if (!newUsername) {
+			strcpy(result, "Incorrect syntax.");
+			return;
+		}
 		char* newPassword = strtok(NULL, " ");
-		if (registerUser(newUsername, newPassword) == 1) 
-			strcpy(result, "User created succesfully.\n");
-		else 
-			strcpy(result, "Username already exists.\n");
+		if (!newPassword) {
+			strcpy(result, "Incorrect syntax.");
+			return;
+		}
+		char* masterPasswordTry = strtok(NULL, " ");
+		char* others;
+		if (masterPasswordTry)
+			others = strtok(NULL, " ");
+		if (others)
+			strcpy(result, "Incorrect syntax.");
+		else {
+			int returned = registerUser(newUsername, newPassword, masterPasswordTry);
+			if (returned == 1) 
+				strcpy(result, "User created succesfully.\n");
+			else if (returned == -1)
+				strcpy(result, "Username already exists.");
+			else if (returned == -2) 
+				strcpy(result, "Too long username/password.");
+			else if (returned == -3)
+				strcpy(result, "Wrong master password.");
+			else if (returned == -4) 
+				strcpy(result, "You can't register another account while logged in.");
+		}
 	}
 
 	else if (strcmp(commandName, "message") == 0) {
 		char* recipients = strtok(NULL, ":");
+		if (!recipients) {
+			strcpy(result, "Incorrect syntax.");
+			return;
+		}
 		char* message = strtok(NULL, "\n");
-		sprintf(result, "%d message(s) sent.\n", sendMessage(username, recipients, message));
+		if (!message) {
+			strcpy(result, "You can't send an empty message.");
+			return;
+		}
+		sprintf(result, "%d message(s) successfully sent.\n", sendMessage(username, recipients, message));
 	}
 	else if (strcmp(commandName, "post") == 0) {
 		char* visibility = strtok(NULL, " ");
+		if (!visibility) {
+			strcpy(result, "Incorrect syntax.");
+			return;
+		}
 		char* message = strtok(NULL, "\n");
+		if (!message) {
+			strcpy(result, "Empty post.");
+			return;
+		}
 		if (post(username, visibility,  message)) 
 			strcpy(result, "Post published succesfully.\n");
 		else 
 			strcpy(result, "Post could not be published.\n");
 	}
-
+	else if (strcmp(commandName, "profile") == 0) {
+		char* user = strtok(NULL, " ");
+		char profile[MAX_PROFILE];
+		bzero(&profile, sizeof(profile));
+		if (!user) { 
+			if (!viewProfile(username, username, profile))
+				strcpy(result, "Error viewing own profile.\n");
+			else 
+				strcpy(result, profile);
+		}
+		else {
+			if(!viewProfile(user, username, profile))
+				strcpy(result, "Access forbidden!\n");
+			else 
+				strcpy(result, profile);
+		}
+	}
+	else if (strcmp(commandName, "addFriend") == 0) {
+		char *userToAdd = strtok(NULL, " ");
+		if (!userToAdd) {
+			strcpy(result, "Incorrect syntax.\n");
+			return;
+		}
+		if (!addToGroup(username, userToAdd, "friends")) 
+			strcpy(result, "Could not add friend.\n");
+		else 
+			strcpy(result, "Friend succesfully added.\n");
+	}
+	else if (strcmp(commandName, "addAcquaintance") == 0) {
+		char *userToAdd = strtok(NULL, " ");
+		if (!userToAdd) {
+			strcpy(result, "Incorrect syntax.\n");
+			return;
+		}
+		if (!addToGroup(username,userToAdd, "acquaintances")) 
+			strcpy(result, "Could not add acquaintance.\n");
+		else 
+			strcpy(result, "Acquaintance succesfully added.\n");
+	}
 	else 
-		strcpy(result, "Command doesn't exist.");
-	
+		strcpy(result, "Command doesn't exist.\n");
 }
 
 void* processClientCommands(void *args) {
@@ -339,12 +609,16 @@ void* processClientCommands(void *args) {
 	int client = clients[clientId];
 	int loggedIn = 0;
 
+	bzero(&usernames[clientId], sizeof(usernames[clientId]));
 	strcpy(usernames[clientId], "");
 
 	while(1) {
 		char command[MAX_CMD];
 		char result[MAX_RES];
 		fflush(stdout);
+
+		bzero(&command, sizeof(command));
+		bzero(&result, sizeof(result));
 
 		if (read(client, command, MAX_CMD) <= 0) {
 			perror("[server]Eroare la citire de la client.\n");	
@@ -361,7 +635,8 @@ void* processClientCommands(void *args) {
 			break;
 		}
 	}
-	close(client);	
+	close(client);
+	strcpy(usernames[clientId], "");	
 }
 
 int main()
