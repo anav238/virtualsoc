@@ -1,0 +1,11 @@
+Comenzile existente pe Instabook sunt:
+- login <username> <password>
+- logout
+- register <username> <password> [<masterPassword>]
+- setProfileVisibility <visibility>
+- profile [<username>] - in absenta parametrului <username>, va afisa profilul utilizatorului curent
+- post <visibility> <test>
+- message <recipient> [<recipient1>, <recipient2>...] : <text>
+- addFriend <username>
+- addAcquaintance <username>
+- help  

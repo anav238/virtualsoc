@@ -41,9 +41,10 @@ int checkCredentials(char* username, char* password) {
 
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	char rbuff[MAX_PROFILE];
 	FileReadStream rs(fd, rbuff, sizeof(rbuff));
 		
@@ -62,22 +63,59 @@ int checkCredentials(char* username, char* password) {
 	return 0;
 }
 
-int userExists(char *username) {
-	return 1;
-}
-
 int getOnlineUserId(char *username) {
 	pthread_mutex_lock(&varLock);
 	for (int i = 0; i < connectedClients; i++) 
-		if (strcmp(usernames[i], username) == 0)
+		if (strcmp(usernames[i], username) == 0) {
+			pthread_mutex_unlock(&varLock);
 			return i;
+		}
 	pthread_mutex_unlock(&varLock);
 	return -1;
+}
+
+int isBlocked(char *user, char *possibleBlocker) {
+	char filename[MAX_UNAME + 10];
+	sprintf(filename, "users/%s.json", possibleBlocker);
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
+		return 0;
+	}
+
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+	assert(doc.HasMember("blocked"));
+	
+	Document::AllocatorType& allocator = doc.GetAllocator();
+
+	assert(doc["blocked"].IsArray());
+	for (SizeType i = 0; i < doc["blocked"].Size(); i++) 
+		if (strcmp(user, doc["blocked"][i].GetString()) == 0) 
+			return 1;
+
+	pthread_mutex_unlock(&fileLock);
+	fclose(fd);
+	return 0;
 }
 
 void getRelationship(Document &doc, char *username, char *relationship) {
 	Document::AllocatorType& allocator = doc.GetAllocator();
 	assert(doc.HasMember("friends"));
+
+	assert(doc["blocked"].IsArray());
+	for (SizeType i = 0; i < doc["blocked"].Size(); i++) {
+		if (strcmp(username, doc["blocked"][i].GetString()) == 0) {
+			strcpy(relationship, "blocked");
+			return;
+		}
+	}
 
 	assert(doc["friends"].IsArray());
 	for (SizeType i = 0; i < doc["friends"].Size(); i++) {
@@ -94,12 +132,26 @@ void getRelationship(Document &doc, char *username, char *relationship) {
 			return;
 		}
 	}
-
 	strcpy(relationship, "strangers");
 }
 
-int addToGroup(char *owner, char *userToAdd, char *group) {
-	if (strcmp(group, "friends") != 0 && strcmp(group, "acquaintances") != 0)
+int removeFromGroup(Document &doc, char *username, char *group) {
+	Document::AllocatorType& allocator = doc.GetAllocator();
+	assert(doc.HasMember(group));
+
+	assert(doc[group].IsArray());
+	for (SizeType i = 0; i < doc[group].Size(); i++) {
+		if (strcmp(username, doc[group][i].GetString()) == 0) {
+			doc[group].Erase(doc[group].Begin() + i);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+int addToGroup(char *owner, char *userToAdd, const char *group) {
+	if (strcmp(group, "friends") != 0 && strcmp(group, "acquaintances") != 0 
+		&& strcmp(group, "blocked") !=0)
 		return 0;
 
 	char filename[MAX_UNAME + 10];
@@ -107,13 +159,16 @@ int addToGroup(char *owner, char *userToAdd, char *group) {
 
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	sprintf(filename, "users/%s.json", owner);
-	if (fd == NULL) 
+	fd = fopen(filename, "r");
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	char rbuff[MAX_PROFILE];
 	FileReadStream rs(fd, rbuff, sizeof(rbuff));
 		
@@ -130,12 +185,20 @@ int addToGroup(char *owner, char *userToAdd, char *group) {
 
 	doc[group].PushBack(addedUser, allocator);
 
+	if (strcmp(group, "friends") != 0)
+		removeFromGroup(doc, userToAdd, "friends");
+	if (strcmp(group, "acquaintances") != 0) 
+		removeFromGroup(doc, userToAdd, "acquaintances");
+	if (strcmp(group, "blocked") != 0) 
+		removeFromGroup(doc, userToAdd, "blocked");
+
 	fclose(fd);
 
 	fd = fopen(filename, "w");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	char wbuff[MAX_PROFILE];
 	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
 	Writer<FileWriteStream> writer(ws);
@@ -153,9 +216,10 @@ int viewProfile(char *username, char *requestFrom, char *profile) {
 
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
-	if (fd == NULL) 
-		return 0;
-
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
+		return -1;
+	}
 	char rbuff[MAX_PROFILE];
 	FileReadStream rs(fd, rbuff, sizeof(rbuff));
 		
@@ -165,15 +229,30 @@ int viewProfile(char *username, char *requestFrom, char *profile) {
 	Document::AllocatorType& allocator = doc.GetAllocator();
 
 	char relationship[20];
-	getRelationship(doc, requestFrom, relationship);
+	if (strcmp(username, requestFrom) == 0) 
+		strcpy(relationship, "friends");
+	else if (requestFrom[0] == '\0') 
+		strcpy(relationship, "strangers");
+	else 
+		getRelationship(doc, requestFrom, relationship);
+
+	if (strcmp(relationship, "blocked") == 0) {
+		pthread_mutex_unlock(&fileLock);
+		return 0;
+	}
+
 	assert(doc.HasMember("visibility"));
 	assert(doc["visibility"].IsString());
 	char profileVisibility[20];
 	strcpy(profileVisibility, doc["visibility"].GetString());
-	if (strcmp(profileVisibility, "friends") == 0 && strcmp(relationship, "friends") != 0)
+	if (strcmp(profileVisibility, "friends") == 0 && strcmp(relationship, "friends") != 0) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-	if (strcmp(profileVisibility, "acquaintances") == 0 && strcmp(relationship, "strangers") == 0)
+	}
+	if (strcmp(profileVisibility, "acquaintances") == 0 && strcmp(relationship, "strangers") == 0) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
+	}
 	assert(doc.HasMember("posts"));
 
 	assert(doc["posts"].IsArray());
@@ -189,6 +268,8 @@ int viewProfile(char *username, char *requestFrom, char *profile) {
 			strcat(profile, "\n");
 		}
 	}
+	if (profile[0] == '\0') 
+		strcpy(profile, "Nothing to see here.");
 	fclose(fd);
 	pthread_mutex_unlock(&fileLock);
 	return 1;
@@ -208,9 +289,10 @@ int post(char *author, char *visibility, char *text) {
 
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	char rbuff[MAX_PROFILE];
 	FileReadStream rs(fd, rbuff, sizeof(rbuff));
 		
@@ -237,9 +319,10 @@ int post(char *author, char *visibility, char *text) {
 	fclose(fd);
 
 	fd = fopen(filename, "w");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	char wbuff[MAX_PROFILE];
 	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
 	Writer<FileWriteStream> writer(ws);
@@ -251,15 +334,15 @@ int post(char *author, char *visibility, char *text) {
 }
 
 void getOfflineInbox(char *username, char *result) {
-	char filename[MAX_UNAME + 10] = "users/";
-	strcat(filename, username);
-	strcat(filename, ".json");
+	char filename[MAX_UNAME + 10];
+	sprintf(filename, "users/%s.json", username);
 
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return;
-
+	}
 	char rbuff[MAX_PROFILE];
 	FileReadStream rs(fd, rbuff, sizeof(rbuff));
 		
@@ -291,9 +374,10 @@ void getOfflineInbox(char *username, char *result) {
 	fclose(fd);
 
 	fd = fopen(filename, "w");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return;
-
+	}
 	char wbuff[MAX_PROFILE];
 	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
 	Writer<FileWriteStream> writer(ws);
@@ -304,15 +388,15 @@ void getOfflineInbox(char *username, char *result) {
 }
 
 int sendOfflineMessage(char *sender, char *recipient, char *message) {
-	char filename[MAX_UNAME + 10] = "users/";
-	strcat(filename, recipient);
-	strcat(filename, ".json");
+	char filename[MAX_UNAME + 10];
+	sprintf(filename, "users/%s.json", recipient);
 
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	char rbuff[MAX_PROFILE];
 	FileReadStream rs(fd, rbuff, sizeof(rbuff));
 		
@@ -339,9 +423,10 @@ int sendOfflineMessage(char *sender, char *recipient, char *message) {
 	fclose(fd);
 
 	fd = fopen(filename, "w");
-	if (fd == NULL) 
+	if (fd == NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return 0;
-
+	}
 	char wbuff[MAX_PROFILE];
 	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
 	Writer<FileWriteStream> writer(ws);
@@ -356,13 +441,14 @@ int sendMessage(char *sender, char *recipients, char *message) {
 	char *currentRecipient = strtok(recipients, " "); 
 	int succeses = 0;
 	while (currentRecipient) {
+		if (isBlocked(sender, currentRecipient)) {
+			currentRecipient = strtok(NULL, " ");
+			continue;
+		}
 		int recipientId = getOnlineUserId(currentRecipient);
-
 		if (recipientId >= 0) {
-			char toSend[MAX_MSG + 200] = "[Message from ";
-			strcat(toSend, sender);
-			strcat(toSend, "] ");
-			strcat(toSend, message);
+			char toSend[MAX_MSG + 200];
+			sprintf(toSend, "[Message from %s]: %s\n", sender, message);
 			if (write(clients[recipientId], toSend, strlen(toSend) + 1) <= 0)
 				perror("[server]Eroare la scriere in client.\n");
 			else
@@ -390,9 +476,10 @@ int registerUser(char* username, char* password, char* masterPasswordTry) {
 
 	pthread_mutex_lock(&fileLock);
 	FILE *fd = fopen(filename, "r");
-	if (fd != NULL) 
+	if (fd != NULL) {
+		pthread_mutex_unlock(&fileLock);
 		return -1;
-
+	}
 	fd = fopen("users/template.json","r");
 	char rbuff[MAX_PROFILE];
 	FileReadStream rs(fd, rbuff, sizeof(rbuff));
@@ -418,6 +505,46 @@ int registerUser(char* username, char* password, char* masterPasswordTry) {
 
 	fd = fopen(filename, "w");
 
+	char wbuff[MAX_PROFILE];
+	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
+	Writer<FileWriteStream> writer(ws);
+	doc.Accept(writer);
+
+	fclose(fd);
+	pthread_mutex_unlock(&fileLock);
+	return 1;
+}
+
+int setProfileVisibility(char* username, char* visibility) {
+	if (strcmp(visibility, "public") != 0 && strcmp(visibility, "friends") !=0 && 
+		strcmp(visibility, "acquaintances") !=0 )
+		return 0;
+
+	char filename[MAX_UNAME + 10] = "users/";
+	strcat(filename, username);
+	strcat(filename, ".json");
+
+	pthread_mutex_lock(&fileLock);
+	FILE *fd = fopen(filename, "r");
+	if (fd == NULL)  {
+		pthread_mutex_unlock(&fileLock);
+		return 0;
+	}
+
+	char rbuff[MAX_PROFILE];
+	FileReadStream rs(fd, rbuff, sizeof(rbuff));
+		
+	Document doc;
+	doc.ParseStream(rs);
+	assert(doc.IsObject());
+
+	Document::AllocatorType& allocator = doc.GetAllocator();
+	assert(doc["visibility"].IsString());
+	doc["visibility"].SetString(visibility, allocator);
+
+	fclose(fd);
+
+	fd = fopen(filename, "w");
 	char wbuff[MAX_PROFILE];
 	FileWriteStream ws(fd, wbuff, sizeof(wbuff));
 	Writer<FileWriteStream> writer(ws);
@@ -460,8 +587,22 @@ int checkPermissions(char* commandName, int* loggedIn) {
 	return 1;
 }
 
+void getHelp(char *help) {
+	FILE *fd = fopen("help.txt", "r");
+	if (fd == NULL)
+		return;
+	int i = 0;
+	char c;
+    while ((c = getc(fd)) != EOF)
+        help[i++] = c;
+	help[i] = '\0';
+    fclose(fd);
+}
+
 void processClientCommand(char* command, int *loggedIn, char* username, char* result) {
 	char* commandName = strtok(command, " ");
+	if (!commandName) 
+		return;
 
 	if (!checkPermissions(commandName, loggedIn)) {
 		strcpy(result, "You don't have permission to do this right now.");
@@ -572,9 +713,12 @@ void processClientCommand(char* command, int *loggedIn, char* username, char* re
 				strcpy(result, profile);
 		}
 		else {
-			if(!viewProfile(user, username, profile))
-				strcpy(result, "Access forbidden!\n");
-			else 
+			int returned = viewProfile(user, username, profile);
+			if(returned == -1)
+				strcpy(result, "User doesn't exist.\n");
+			else if (returned == 0) 
+				strcpy(result, "Acces forbidden.\n");
+			else if (returned == 1)
 				strcpy(result, profile);
 		}
 	}
@@ -595,10 +739,39 @@ void processClientCommand(char* command, int *loggedIn, char* username, char* re
 			strcpy(result, "Incorrect syntax.\n");
 			return;
 		}
-		if (!addToGroup(username,userToAdd, "acquaintances")) 
+		if (!addToGroup(username, userToAdd, "acquaintances")) 
 			strcpy(result, "Could not add acquaintance.\n");
 		else 
 			strcpy(result, "Acquaintance succesfully added.\n");
+	}
+	else if (strcmp(commandName, "setProfileVisibility") == 0) {
+		char *visibility = strtok(NULL, " ");
+		if (!visibility) {
+			strcpy(result, "Incorrect syntax.\n");
+			return;
+		}
+		if (setProfileVisibility(username, visibility)) 
+			strcpy(result, "Profile visibility successfully set.\n");
+		else 
+			strcpy(result, "Wrong parameter.\n");
+	}
+	else if (strcmp(commandName, "block") == 0) {
+		char *userToBlock = strtok(NULL, " ");
+		if (!username) {
+			strcpy(result, "Incorrect syntax.\n");
+			return;
+		}
+		if (isBlocked(userToBlock, username)) 
+			strcpy(result, "User already blocked.\n");
+		else if (addToGroup(username, userToBlock, "blocked")) 
+			strcpy(result, "User blocked succesfully.\n");
+		else 
+			strcpy(result, "User doesn't exist.\n");
+	}
+	else if (strcmp(commandName, "help") == 0) {
+		char help[1000];
+		getHelp(help);
+		strcpy(result, help);
 	}
 	else 
 		strcpy(result, "Command doesn't exist.\n");

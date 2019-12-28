@@ -28,8 +28,6 @@ void* getServerMessages(void* args) {
         if (strlen(message)) {
             if (message[0] == '[') 
                 strcpy(inbox, message);
-            else if (strcmp(message, "TERMINATE") == 0) 
-                break;
             else {
                 printf("%s\n", message);
                 if (strlen(inbox)) {
@@ -52,15 +50,12 @@ void processCommands() {
         fgets(full_command, MAX_CMD, stdin);
 
         char *command = strtok(full_command, "\n");
-        if (strcmp(command, "help") == 0) {
-            printHelp();
-            continue;
-        }
-        if (strcmp(command, "refresh") == 0) {
+        if (!command) {
             if (strlen(inbox)) {
                 printf("%s\n", inbox);
                 strcpy(inbox, "");
             }
+            continue;
         }
         if (strcmp(command, "quit") == 0) 
             break;
@@ -69,7 +64,6 @@ void processCommands() {
             perror ("[client]Eroare la write() spre server.\n");
 
     }
-    ended = 1;
 }
 
 int main (int argc, char *argv[])
